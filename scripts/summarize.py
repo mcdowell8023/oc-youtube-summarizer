@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-YouTube Summarizer - Universal YouTube Video Summarization Tool
+YouTube / Bilibili Summarizer - Universal Video Summarization Tool
 
 Usage:
   youtube-summarizer --url "https://youtube.com/watch?v=VIDEO_ID"
+  youtube-summarizer --url "https://www.bilibili.com/video/BV1xxxxx"
   youtube-summarizer --channel "UC_x5XG1OV2P6uZZ5FSM9Ttw" --hours 24
   youtube-summarizer --config channels.json --daily --output /tmp/youtube_summary.json
 """
@@ -11,6 +12,7 @@ Usage:
 import os
 import sys
 import json
+import glob
 import argparse
 import subprocess
 from datetime import datetime, timezone, timedelta
@@ -22,8 +24,10 @@ DEFAULT_MIN_DURATION = 300  # 5 minutes (filter Shorts)
 DEFAULT_HOURS_LOOKBACK = 24
 DEFAULT_MAX_VIDEOS_PER_CHANNEL = 5
 DEFAULT_OUTPUT = "/tmp/youtube_summary.json"
+DEFAULT_WHISPER_MODEL = "small"
+DEFAULT_FRAME_INTERVAL = 30  # seconds
 
-SUMMARY_PROMPT_TEMPLATE = """You are a professional content analyst. Please generate an in-depth, practical summary (at least 300 words) for the following YouTube video transcript.
+SUMMARY_PROMPT_TEMPLATE = """You are a professional content analyst. Please generate an in-depth, practical summary (at least 300 words) for the following video transcript.
 
 Video Title: {title}
 Channel: {channel}
@@ -53,18 +57,138 @@ Please output strictly in the following format (no preamble):
 - Risks, limitations, and important notes"""
 
 
+# ─────────────────────────────────────────────
+# Platform detection
+# ─────────────────────────────────────────────
+
+def detect_platform(url: str) -> str:
+    """Detect video platform from URL."""
+    if 'bilibili.com' in url or 'b23.tv' in url:
+        return 'bilibili'
+    elif 'youtube.com' in url or 'youtu.be' in url:
+        return 'youtube'
+    else:
+        return 'unknown'
+
+
+# ─────────────────────────────────────────────
+# Bilibili helpers
+# ─────────────────────────────────────────────
+
+def extract_bilibili_id(url: str) -> str:
+    """Extract BV number from Bilibili URL (follows b23.tv short links)."""
+    import re
+    if 'b23.tv' in url:
+        try:
+            import requests
+            r = requests.head(url, allow_redirects=True, timeout=10)
+            url = r.url
+        except Exception:
+            pass
+    match = re.search(r'BV[\w]+', url)
+    return match.group(0) if match else "unknown"
+
+
+def process_bilibili_video(
+    url: str,
+    output_dir: str = "/tmp",
+    whisper_model: str = DEFAULT_WHISPER_MODEL,
+    frame_interval: int = DEFAULT_FRAME_INTERVAL,
+    skip_frames: bool = False,
+) -> Dict:
+    """
+    Process a Bilibili video:
+      1. Download video via yt-dlp (Chrome cookies bypass 412)
+      2. Extract audio with ffmpeg
+      3. Transcribe with faster-whisper
+      4. Extract keyframes with ffmpeg (optional)
+    Returns a dict with paths and transcript text.
+    """
+    video_id = extract_bilibili_id(url)
+    video_path = os.path.join(output_dir, f"bili_{video_id}.mp4")
+    audio_path = os.path.join(output_dir, f"bili_{video_id}_audio.mp3")
+    frames_dir = os.path.join(output_dir, f"bili_{video_id}_frames")
+    transcript_path = os.path.join(output_dir, f"bili_{video_id}_transcript.txt")
+
+    print(f"🎬 Bilibili: {video_id}", file=sys.stderr)
+
+    # Step 1: Download video
+    print("  📥 Downloading video...", file=sys.stderr)
+    download_cmd = [
+        "yt-dlp",
+        "--cookies-from-browser", "chrome",
+        "--no-check-certificates",
+        "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]",
+        "--merge-output-format", "mp4",
+        "-o", video_path,
+        url,
+    ]
+    subprocess.run(download_cmd, check=True, timeout=300)
+
+    # Step 2: Extract audio
+    print("  🎵 Extracting audio...", file=sys.stderr)
+    subprocess.run([
+        "ffmpeg", "-y", "-i", video_path,
+        "-vn", "-acodec", "libmp3lame", "-q:a", "2",
+        audio_path,
+    ], check=True, timeout=120, capture_output=True)
+
+    # Step 3: Whisper transcription
+    print(f"  🗣️  Transcribing (whisper {whisper_model})...", file=sys.stderr)
+    from faster_whisper import WhisperModel
+    model = WhisperModel(whisper_model, device="cpu", compute_type="int8")
+    segments_iter, info = model.transcribe(audio_path, language="zh")
+
+    segments_list = list(segments_iter)
+    transcript_lines = [f"[{s.start:.1f}-{s.end:.1f}] {s.text}" for s in segments_list]
+    transcript_with_timestamps = "\n".join(transcript_lines)
+    transcript_plain = " ".join(s.text for s in segments_list)
+
+    with open(transcript_path, "w", encoding="utf-8") as f:
+        f.write(transcript_with_timestamps)
+    print(f"  ✅ Transcript: {len(transcript_plain)} chars", file=sys.stderr)
+
+    # Step 4: Extract keyframes
+    frame_files = []
+    if not skip_frames:
+        print(f"  🖼️  Extracting keyframes (every {frame_interval}s)...", file=sys.stderr)
+        os.makedirs(frames_dir, exist_ok=True)
+        subprocess.run([
+            "ffmpeg", "-y", "-i", video_path,
+            "-vf", f"fps=1/{frame_interval}", "-q:v", "2",
+            os.path.join(frames_dir, "frame_%03d.jpg"),
+        ], check=True, timeout=120, capture_output=True)
+        frame_files = sorted(glob.glob(os.path.join(frames_dir, "frame_*.jpg")))
+        print(f"  ✅ Keyframes: {len(frame_files)}", file=sys.stderr)
+
+    return {
+        "video_id": video_id,
+        "platform": "bilibili",
+        "video_path": video_path,
+        "audio_path": audio_path,
+        "transcript_path": transcript_path,
+        "transcript": transcript_plain,
+        "transcript_with_timestamps": transcript_with_timestamps,
+        "frame_files": frame_files,
+        "frame_count": len(frame_files),
+    }
+
+
+# ─────────────────────────────────────────────
+# YouTube helpers (unchanged)
+# ─────────────────────────────────────────────
+
 def get_channel_videos(channel_id: str, hours: int, max_videos: int) -> List[Dict]:
     """Get recent videos from a YouTube channel using yt-dlp"""
     videos = []
-    
-    # Build channel URL
+
     if channel_id.startswith("UC") and len(channel_id) == 24:
         url = f"https://www.youtube.com/channel/{channel_id}/videos"
     elif channel_id.startswith("http"):
         url = channel_id.rstrip("/") + "/videos"
     else:
         url = f"https://www.youtube.com/@{channel_id}/videos"
-    
+
     try:
         result = subprocess.run(
             [
@@ -79,26 +203,22 @@ def get_channel_videos(channel_id: str, hours: int, max_videos: int) -> List[Dic
             text=True,
             timeout=45,
         )
-        
+
         if result.returncode != 0:
             print(f"⚠️ yt-dlp error for {channel_id}: {result.stderr[:100]}", file=sys.stderr)
             return []
-        
+
         data = json.loads(result.stdout)
         entries = data.get("entries", [])
-        
+
         for entry in entries:
             if not entry:
                 continue
-            
             video_id = entry.get("id")
             if not video_id:
                 continue
-            
-            # Filter Shorts by duration
             if entry.get("duration") and entry.get("duration") < DEFAULT_MIN_DURATION:
                 continue
-            
             videos.append({
                 "id": video_id,
                 "title": entry.get("title", "Unknown"),
@@ -106,13 +226,12 @@ def get_channel_videos(channel_id: str, hours: int, max_videos: int) -> List[Dic
                 "url": f"https://www.youtube.com/watch?v={video_id}",
                 "duration_hint": entry.get("duration"),
             })
-            
             if len(videos) >= max_videos:
                 break
-        
+
     except Exception as e:
         print(f"⚠️ Error fetching channel {channel_id}: {e}", file=sys.stderr)
-    
+
     return videos
 
 
@@ -131,13 +250,13 @@ def get_video_details(video_id: str) -> Optional[Dict]:
             text=True,
             timeout=20,
         )
-        
+
         if result.returncode != 0:
             return None
-        
+
         data = json.loads(result.stdout)
         duration = data.get("duration", 0)
-        
+
         return {
             "duration_seconds": duration,
             "duration": f"{duration // 60}:{duration % 60:02d}",
@@ -146,60 +265,51 @@ def get_video_details(video_id: str) -> Optional[Dict]:
             "view_count": data.get("view_count", 0),
             "like_count": data.get("like_count", 0),
         }
-        
+
     except Exception:
         return None
 
 
 def get_transcript(video_id: str) -> Optional[str]:
     """Get video transcript using multiple methods to avoid rate limiting"""
-    # Method 1: innertube ANDROID client (bypasses rate limits)
     transcript = _get_transcript_innertube_proxy(video_id)
     if transcript:
         return transcript
-    
-    # Method 2: youtube-transcript-api (fallback, may be rate limited)
     transcript = _get_transcript_ytapi(video_id)
     if transcript:
         return transcript
-    
     return None
 
 
 def _parse_caption_xml(xml_text: str) -> List[str]:
-    """Parse YouTube caption XML (supports multiple formats)"""
     import xml.etree.ElementTree as ET
     import html as html_mod
-    
+
     try:
         root = ET.fromstring(xml_text)
         texts = []
-        
-        # Try <p> tags first (format 3 and format 2)
+
         for p in root.findall('.//p'):
-            # Check for <s> child tags (format 3: word-level)
             words = []
             for s in p.findall('s'):
                 if s.text:
                     words.append(html_mod.unescape(s.text.strip()))
             if words:
                 texts.append(' '.join(words))
-            elif p.text:  # format 2: direct text
+            elif p.text:
                 texts.append(html_mod.unescape(p.text.strip()))
-        
-        # If no <p> found, try <text> tags (format 1)
+
         if not texts:
             for elem in root.findall('.//text'):
                 if elem.text:
                     texts.append(html_mod.unescape(elem.text.strip()))
-        
+
         return texts
     except Exception:
         return []
 
 
 def _download_caption(url: str) -> Optional[str]:
-    """Download caption content directly"""
     try:
         import requests
         r = requests.get(url, timeout=15)
@@ -207,26 +317,23 @@ def _download_caption(url: str) -> Optional[str]:
             return r.text
     except Exception:
         pass
-    
     return None
 
 
 def _get_transcript_innertube_proxy(video_id: str) -> Optional[str]:
-    """Method 1: innertube ANDROID client to download captions"""
     try:
         import innertube
-        
+
         client = innertube.InnerTube('ANDROID')
         data = client.player(video_id=video_id)
-        
+
         if 'captions' not in data:
             return None
-        
+
         caps = data['captions']['playerCaptionsTracklistRenderer']['captionTracks']
         if not caps:
             return None
-        
-        # Priority: en > zh-Hans > zh > first available
+
         cap_url = None
         for prefer in ['en', 'zh-Hans', 'zh']:
             for c in caps:
@@ -237,38 +344,40 @@ def _get_transcript_innertube_proxy(video_id: str) -> Optional[str]:
                 break
         if not cap_url:
             cap_url = caps[0]['baseUrl']
-        
+
         xml_text = _download_caption(cap_url)
         if not xml_text:
             return None
-        
+
         texts = _parse_caption_xml(xml_text)
         if not texts:
             return None
-        
+
         result = ' '.join(texts).strip()
         return result if len(result) > 50 else None
-        
+
     except Exception:
         return None
 
 
 def _get_transcript_ytapi(video_id: str) -> Optional[str]:
-    """Method 2 (fallback): youtube-transcript-api direct connection"""
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
-        
+
         api = YouTubeTranscriptApi()
         fetched = api.fetch(video_id, languages=["zh-Hans", "zh-Hant", "en"])
         transcript = " ".join([item.text if hasattr(item, 'text') else item["text"] for item in fetched])
         return transcript if len(transcript) > 50 else None
-        
+
     except Exception:
         return None
 
 
+# ─────────────────────────────────────────────
+# LLM helpers (shared)
+# ─────────────────────────────────────────────
+
 def get_copilot_session_token(gh_token: str) -> Optional[str]:
-    """Exchange GitHub token for a Copilot session token"""
     try:
         import requests
         r = requests.get(
@@ -289,7 +398,6 @@ def get_copilot_session_token(gh_token: str) -> Optional[str]:
 
 
 def _call_llm(api_url: str, api_key: str, model: str, prompt: str) -> Optional[str]:
-    """Call an OpenAI-compatible chat completions endpoint"""
     try:
         import requests
         headers = {
@@ -318,15 +426,7 @@ def _call_llm(api_url: str, api_key: str, model: str, prompt: str) -> Optional[s
 
 
 def generate_summary(title: str, channel: str, duration: str, transcript: str) -> Optional[str]:
-    """Generate summary using LLM API.
-    
-    Fallback chain:
-    1. Environment variables: LLM_API_URL + LLM_API_KEY + LLM_MODEL (custom endpoint)
-    2. OPENCLAW_GATEWAY_TOKEN → http://localhost:18789/v1/chat/completions
-    3. GITHUB_TOKEN / GH_TOKEN → GitHub Copilot API
-    4. POLLINATIONS_API_KEY → Pollinations API
-    5. Pollinations free anonymous call (no Authorization header)
-    """
+    """Generate summary using LLM API (multi-backend fallback chain)."""
     prompt = SUMMARY_PROMPT_TEMPLATE.format(
         title=title,
         channel=channel,
@@ -334,7 +434,6 @@ def generate_summary(title: str, channel: str, duration: str, transcript: str) -
         transcript=transcript[:8000]
     )
 
-    # --- Level 1: Custom endpoint via environment variables ---
     env_url = os.environ.get("LLM_API_URL")
     env_key = os.environ.get("LLM_API_KEY")
     env_model = os.environ.get("LLM_MODEL", "gpt-4o-mini")
@@ -345,17 +444,14 @@ def generate_summary(title: str, channel: str, duration: str, transcript: str) -
         if result:
             return result
 
-    # --- Level 2: OpenClaw Gateway token ---
     oc_token = os.environ.get("OPENCLAW_GATEWAY_TOKEN")
     if oc_token:
         api_url = env_url or "http://localhost:18789/v1/chat/completions"
-        model = env_model
         print(f"  🔑 Using OPENCLAW_GATEWAY_TOKEN → {api_url}", file=sys.stderr)
-        result = _call_llm(api_url, oc_token, model, prompt)
+        result = _call_llm(api_url, oc_token, env_model, prompt)
         if result:
             return result
 
-    # --- Level 3: GitHub Copilot API via GITHUB_TOKEN or GH_TOKEN ---
     gh_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if gh_token:
         print("  🔑 Trying GitHub Copilot API...", file=sys.stderr)
@@ -371,7 +467,6 @@ def generate_summary(title: str, channel: str, duration: str, transcript: str) -
             if result:
                 return result
 
-    # --- Level 4: Pollinations API (with key) ---
     poll_key = os.environ.get("POLLINATIONS_API_KEY")
     if poll_key:
         print("  🔑 Trying Pollinations API (with key)...", file=sys.stderr)
@@ -384,11 +479,10 @@ def generate_summary(title: str, channel: str, duration: str, transcript: str) -
         if result:
             return result
 
-    # --- Level 5: Pollinations free anonymous call ---
     print("  🌐 Trying Pollinations free anonymous call...", file=sys.stderr)
     result = _call_llm(
         "https://gen.pollinations.ai/v1/chat/completions",
-        "",  # no key
+        "",
         "openai",
         prompt
     )
@@ -399,11 +493,14 @@ def generate_summary(title: str, channel: str, duration: str, transcript: str) -
     return None
 
 
+# ─────────────────────────────────────────────
+# YouTube video processing
+# ─────────────────────────────────────────────
+
 def process_video(video_id: str, title: str = None, channel: str = None) -> Dict:
-    """Process a single video: get details, transcript, and summary"""
+    """Process a single YouTube video: get details, transcript, and summary"""
     print(f"📹 Processing: {video_id}")
-    
-    # Get video details
+
     details = get_video_details(video_id)
     if not details:
         return {
@@ -412,15 +509,15 @@ def process_video(video_id: str, title: str = None, channel: str = None) -> Dict
             "url": f"https://www.youtube.com/watch?v={video_id}",
             "error": "Failed to fetch video details"
         }
-    
-    # Get transcript
+
     transcript = get_transcript(video_id)
     has_transcript = transcript is not None
-    
+
     result = {
         "video_id": video_id,
         "title": title or "Unknown",
         "url": f"https://www.youtube.com/watch?v={video_id}",
+        "platform": "youtube",
         "channel": channel or "Unknown",
         "duration": details["duration"],
         "published": details["published"],
@@ -430,60 +527,120 @@ def process_video(video_id: str, title: str = None, channel: str = None) -> Dict
             "like_count": details.get("like_count", 0),
         }
     }
-    
-    # Generate summary if transcript available
+
     if has_transcript:
         print(f"  ✅ Transcript: {len(transcript)} chars")
         summary = generate_summary(title, channel, details["duration"], transcript)
+        result["summary"] = summary or "⚠️ 摘要生成失败\n\n视频有字幕但 LLM 调用失败。"
         if summary:
-            result["summary"] = summary
             print(f"  ✅ Summary: {len(summary)} chars")
-        else:
-            result["summary"] = f"⚠️ 摘要生成失败\n\n视频有字幕但 LLM 调用失败。"
     else:
         result["summary"] = f"📺 **需观看获取详细内容**\n\n视频暂无字幕，无法生成详细摘要。\n\n基于标题推测：{title}"
         print(f"  ⚠️ No transcript available")
-    
+
     return result
 
 
+# ─────────────────────────────────────────────
+# CLI entry point
+# ─────────────────────────────────────────────
+
 def main():
-    parser = argparse.ArgumentParser(description="YouTube Summarizer")
-    parser.add_argument("--url", help="Single video URL")
-    parser.add_argument("--channel", help="Channel ID or handle")
+    parser = argparse.ArgumentParser(description="YouTube / Bilibili Summarizer")
+    parser.add_argument("--url", help="Single video URL (YouTube or Bilibili)")
+    parser.add_argument("--channel", help="YouTube channel ID or handle")
     parser.add_argument("--config", help="Config file path (JSON)")
     parser.add_argument("--daily", action="store_true", help="Daily batch mode (requires --config)")
     parser.add_argument("--hours", type=int, default=DEFAULT_HOURS_LOOKBACK, help="Hours to look back")
     parser.add_argument("--output", default=DEFAULT_OUTPUT, help="Output JSON file")
-    
+
+    # Bilibili-specific options
+    parser.add_argument("--no-frames", action="store_true",
+                        help="Skip keyframe extraction (Bilibili)")
+    parser.add_argument("--whisper-model",
+                        default=os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
+                        help="Whisper model size for Bilibili (default: small)")
+    parser.add_argument("--frame-interval", type=int,
+                        default=int(os.environ.get("FRAME_INTERVAL", DEFAULT_FRAME_INTERVAL)),
+                        help="Keyframe extraction interval in seconds (default: 30)")
+
     args = parser.parse_args()
-    
+
     results = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "items": [],
         "stats": {
             "total_videos": 0,
             "with_transcript": 0,
-            "without_transcript": 0
+            "without_transcript": 0,
         }
     }
-    
-    # Mode 1: Single video
+
+    # Mode 1: Single video (YouTube or Bilibili)
     if args.url:
-        video_id = args.url.split("v=")[-1].split("&")[0]
-        result = process_video(video_id)
-        results["items"].append(result)
-        results["stats"]["total_videos"] = 1
-        if result.get("has_transcript"):
-            results["stats"]["with_transcript"] = 1
+        platform = detect_platform(args.url)
+
+        if platform == 'bilibili':
+            output_dir = str(Path(args.output).parent) if args.output != DEFAULT_OUTPUT else "/tmp"
+            try:
+                bili_result = process_bilibili_video(
+                    args.url,
+                    output_dir=output_dir,
+                    whisper_model=args.whisper_model,
+                    frame_interval=args.frame_interval,
+                    skip_frames=args.no_frames,
+                )
+                summary = generate_summary(
+                    title=bili_result.get("title", "B站视频"),
+                    channel="Bilibili",
+                    duration="unknown",
+                    transcript=bili_result["transcript"],
+                )
+                result = {
+                    "video_id": bili_result["video_id"],
+                    "title": bili_result.get("title", "B站视频"),
+                    "url": args.url,
+                    "platform": "bilibili",
+                    "has_transcript": bool(bili_result["transcript"]),
+                    "transcript_path": bili_result["transcript_path"],
+                    "frame_files": bili_result["frame_files"],
+                    "frame_count": bili_result["frame_count"],
+                    "summary": summary or "摘要生成失败",
+                }
+                results["items"].append(result)
+                results["stats"]["total_videos"] = 1
+                results["stats"]["with_transcript"] = 1
+            except Exception as e:
+                print(f"❌ Bilibili processing failed: {e}", file=sys.stderr)
+                results["items"].append({
+                    "url": args.url,
+                    "platform": "bilibili",
+                    "error": str(e),
+                })
+                results["stats"]["total_videos"] = 1
+                results["stats"]["without_transcript"] = 1
+
+        elif platform == 'youtube':
+            video_id = args.url.split("v=")[-1].split("&")[0]
+            if "youtu.be/" in args.url:
+                video_id = args.url.split("youtu.be/")[-1].split("?")[0]
+            result = process_video(video_id)
+            results["items"].append(result)
+            results["stats"]["total_videos"] = 1
+            if result.get("has_transcript"):
+                results["stats"]["with_transcript"] = 1
+            else:
+                results["stats"]["without_transcript"] = 1
+
         else:
-            results["stats"]["without_transcript"] = 1
-    
+            print(f"❌ Unsupported URL platform: {args.url}", file=sys.stderr)
+            sys.exit(1)
+
     # Mode 2: Channel scan
     elif args.channel:
         videos = get_channel_videos(args.channel, args.hours, DEFAULT_MAX_VIDEOS_PER_CHANNEL)
         print(f"📺 Found {len(videos)} videos from channel")
-        
+
         for video in videos:
             result = process_video(video["id"], video["title"], video["channel"])
             results["items"].append(result)
@@ -492,26 +649,26 @@ def main():
                 results["stats"]["with_transcript"] += 1
             else:
                 results["stats"]["without_transcript"] += 1
-    
+
     # Mode 3: Daily batch (config file)
     elif args.daily and args.config:
         with open(args.config, "r") as f:
             config = json.load(f)
-        
+
         channels = config.get("channels", [])
         hours = config.get("hours_lookback", args.hours)
         max_videos = config.get("max_videos_per_channel", DEFAULT_MAX_VIDEOS_PER_CHANNEL)
-        
+
         print(f"📺 Processing {len(channels)} channels")
-        
+
         for ch in channels:
             channel_id = ch.get("id") or ch.get("url")
             channel_name = ch.get("name", "Unknown")
-            
+
             print(f"\n🔍 Channel: {channel_name}")
             videos = get_channel_videos(channel_id, hours, max_videos)
             print(f"  Found {len(videos)} videos")
-            
+
             for video in videos:
                 result = process_video(video["id"], video["title"], channel_name)
                 results["items"].append(result)
@@ -520,18 +677,18 @@ def main():
                     results["stats"]["with_transcript"] += 1
                 else:
                     results["stats"]["without_transcript"] += 1
-    
+
     else:
         parser.print_help()
         sys.exit(1)
-    
+
     # Write output
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    with open(output_path, "w") as f:
+
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
-    
+
     print(f"\n✅ Output written to: {output_path}")
     print(f"📊 Stats: {results['stats']}")
 

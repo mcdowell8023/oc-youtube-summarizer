@@ -40,13 +40,24 @@ fi
 # Activate and install dependencies
 echo "📦 Installing Python dependencies..."
 source "$VENV_DIR/bin/activate"
-pip install --quiet youtube-transcript-api requests innertube
+pip install --quiet youtube-transcript-api requests innertube faster-whisper
+
+echo ""
+
+# Check ffmpeg (required for Bilibili)
+if ! command -v ffmpeg &> /dev/null; then
+    echo "⚠️  ffmpeg not found. Required for Bilibili video processing."
+    echo "   Install: sudo apt install ffmpeg (Linux) / brew install ffmpeg (macOS)"
+else
+    echo "✅ ffmpeg found"
+fi
 
 echo ""
 echo "✅ Setup complete!"
 echo ""
 echo "Usage:"
 echo "  youtube-summarizer --url 'https://youtube.com/watch?v=VIDEO_ID'"
+echo "  youtube-summarizer --url 'https://www.bilibili.com/video/BV1xxxxx'"
 echo "  youtube-summarizer --channel 'UC_x5XG1OV2P6uZZ5FSM9Ttw' --hours 24"
 echo "  youtube-summarizer --config channels.json --daily --output /tmp/youtube_summary.json"
 echo ""
