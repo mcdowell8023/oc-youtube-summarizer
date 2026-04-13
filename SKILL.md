@@ -1,3 +1,11 @@
+---
+name: youtube-summarizer
+description: YouTube video transcript extraction and AI-powered summarization. Use when you need to summarize a YouTube video, extract transcripts, scan channels for new content, or generate daily video digests.
+metadata:
+  author: mcdowell8023
+  repo: https://github.com/mcdowell8023/oc-youtube-summarizer
+---
+
 # YouTube Summarizer Skill
 
 通用 YouTube 视频摘要工具，支持单个视频、频道扫描、每日批量处理。
