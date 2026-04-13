@@ -1,0 +1,28 @@
+#!/bin/bash
+# YouTube Summarizer CLI wrapper
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_SCRIPT="$SCRIPT_DIR/scripts/summarize.py"
+VENV_DIR="$SCRIPT_DIR/venv"
+
+# Check if Python script exists
+if [ ! -f "$PYTHON_SCRIPT" ]; then
+    echo "Error: summarize.py not found at $PYTHON_SCRIPT"
+    exit 1
+fi
+
+# Check if venv exists
+if [ ! -d "$VENV_DIR" ]; then
+    echo "Error: Virtual environment not found. Run ./setup.sh first"
+    exit 1
+fi
+
+# Check dependencies
+if ! command -v yt-dlp &> /dev/null; then
+    echo "Error: yt-dlp not found. Install with: brew install yt-dlp"
+    exit 1
+fi
+
+# Activate venv and run
+source "$VENV_DIR/bin/activate"
+python3 "$PYTHON_SCRIPT" "$@"
