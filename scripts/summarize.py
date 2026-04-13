@@ -27,6 +27,35 @@ DEFAULT_OUTPUT = "/tmp/youtube_summary.json"
 DEFAULT_WHISPER_MODEL = "small"
 DEFAULT_FRAME_INTERVAL = 30  # seconds
 
+# ─────────────────────────────────────────────
+# Config loader
+# ─────────────────────────────────────────────
+
+def load_settings() -> dict:
+    """Load settings from config/settings.json (relative to this script's skill root)."""
+    skill_root = Path(__file__).parent.parent
+    config_path = skill_root / "config" / "settings.json"
+    if config_path.exists():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+SETTINGS = load_settings()
+
+
+def resolve_mode(args_mode: str | None) -> str:
+    """Resolve effective mode: CLI arg > env var > config file > default (ai-review)."""
+    if args_mode:
+        return args_mode
+    env_mode = os.environ.get("SUMMARY_MODE")
+    if env_mode:
+        return env_mode
+    return SETTINGS.get("default_mode", "ai-review")
+
 SUMMARY_PROMPT_TEMPLATE = """You are a professional content analyst. Please generate an in-depth, practical summary (at least 300 words) for the following video transcript.
 
 Video Title: {title}
@@ -595,20 +624,35 @@ def main():
     parser.add_argument("--hours", type=int, default=DEFAULT_HOURS_LOOKBACK, help="Hours to look back")
     parser.add_argument("--output", default=DEFAULT_OUTPUT, help="Output JSON file")
 
+    # Mode selection
+    parser.add_argument("--mode",
+                        choices=["text-only", "auto-insert", "ai-review"],
+                        default=None,
+                        help="Output mode: text-only / auto-insert / ai-review (overrides config & env)")
+
     # Bilibili-specific options
     parser.add_argument("--no-frames", action="store_true",
-                        help="Skip keyframe extraction (Bilibili)")
+                        help="Skip keyframe extraction (Bilibili) — same as --mode text-only")
     parser.add_argument("--whisper-model",
-                        default=os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
+                        default=os.environ.get("WHISPER_MODEL", SETTINGS.get("whisper_model", DEFAULT_WHISPER_MODEL)),
                         help="Whisper model size for Bilibili (default: small)")
     parser.add_argument("--frame-interval", type=int,
-                        default=int(os.environ.get("FRAME_INTERVAL", DEFAULT_FRAME_INTERVAL)),
+                        default=int(os.environ.get("FRAME_INTERVAL", SETTINGS.get("frame_interval", DEFAULT_FRAME_INTERVAL))),
                         help="Keyframe extraction interval in seconds (default: 30)")
     parser.add_argument("--max-frames", type=int,
-                        default=int(os.environ.get("MAX_FRAMES", 10)),
-                        help="Max keyframes to select (default: 10)")
+                        default=int(os.environ.get("MAX_FRAMES", SETTINGS.get("max_frames", 15))),
+                        help="Max keyframes to select (default: 15)")
 
     args = parser.parse_args()
+
+    # Resolve effective mode
+    effective_mode = resolve_mode(args.mode)
+    # --no-frames is equivalent to text-only
+    if args.no_frames:
+        effective_mode = "text-only"
+    skip_frames = (effective_mode == "text-only")
+
+    print(f"🎨 图文模式: {effective_mode}", file=sys.stderr)
 
     results = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -632,7 +676,7 @@ def main():
                     output_dir=output_dir,
                     whisper_model=args.whisper_model,
                     frame_interval=args.frame_interval,
-                    skip_frames=args.no_frames,
+                    skip_frames=skip_frames,
                     max_frames=args.max_frames,
                 )
                 summary = generate_summary(
@@ -646,6 +690,7 @@ def main():
                     "title": bili_result.get("title", "B站视频"),
                     "url": args.url,
                     "platform": "bilibili",
+                    "mode": effective_mode,
                     "has_transcript": bool(bili_result["transcript"]),
                     "transcript_path": bili_result["transcript_path"],
                     "frame_files": bili_result["frame_files"],
@@ -656,6 +701,8 @@ def main():
                     "frame_time_map": bili_result["frame_time_map"],
                     "summary": summary or "摘要生成失败",
                 }
+                if effective_mode == "ai-review":
+                    result["ai_review_hint"] = "⚠️ ai-review 模式：agent 需基于文章结构对帧进行审图（补帧/删帧/替换），再出图文版。"
                 results["items"].append(result)
                 results["stats"]["total_videos"] = 1
                 results["stats"]["with_transcript"] = 1

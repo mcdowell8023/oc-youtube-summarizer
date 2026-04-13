@@ -13,6 +13,7 @@ Production-ready OpenClaw skill for YouTube video transcription and summarizatio
 - ✅ **Reliable Transcript Fetching** - Dual-method approach bypasses YouTube rate limiting
 - ✅ **Batch Processing** - Process multiple channels in one run
 - ✅ **AI-Powered Summaries** - Generate structured, insightful summaries
+- ✅ **3 Output Modes** - text-only / auto-insert / ai-review (configurable)
 - ✅ **Cron-Friendly** - Built for automated daily runs
 - ✅ **JSON Output** - Flexible integration with any agent or platform
 - ✅ **Filters Shorts** - Skip videos under 5 minutes
@@ -28,9 +29,16 @@ cd ~/.openclaw/workspace/skills
 git clone https://github.com/mcdowell8023/oc-youtube-summarizer.git youtube-summarizer
 cd youtube-summarizer
 ./setup.sh
+# ↑ 安装完成后会引导你选择默认图文模式
+
+# Re-configure mode anytime
+./youtube-summarizer --setup
 
 # Test single video
 ./youtube-summarizer --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+# With explicit mode
+./youtube-summarizer --url "https://b23.tv/xxx" --mode ai-review
 
 # Scan channel (last 24 hours)
 ./youtube-summarizer --channel "UCSHZKyawb77ixDdsGog4iWA" --hours 24
@@ -38,6 +46,19 @@ cd youtube-summarizer
 # Daily batch (for cron)
 ./youtube-summarizer --config channels.json --daily --output /tmp/youtube_summary.json
 ```
+
+## Output Modes
+
+| Mode | Description | Extra Tokens |
+|------|-------------|-------------|
+| `text-only` | Text only, no frames | 0 |
+| `auto-insert` | Fixed-rule frame selection, insert by timestamp | ~0 |
+| `ai-review` ← **default** | AI-driven image selection based on article structure | ~5-8k |
+
+Select mode at install time, or override anytime:
+- `--mode <mode>` CLI flag
+- `SUMMARY_MODE` env var
+- `config/settings.json` → `default_mode`
 
 ## How It Works
 

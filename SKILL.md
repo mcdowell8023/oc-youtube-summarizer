@@ -28,6 +28,18 @@ cd ~/.openclaw/skills/youtube-summarizer
 ./setup.sh
 ```
 
+安装完成后会引导你选择默认图文模式（可随时重新配置）：
+
+```
+📋 选择默认图文模式:
+  1) text-only    - 纯文字，不抽帧（最快）
+  2) auto-insert  - 自动选帧插入文档（推荐平衡）
+  3) ai-review    - AI 智能选图（默认，最佳效果，多消耗 ~5-8k token）
+请选择 [1/2/3] (默认 3):
+```
+
+配置写入 `config/settings.json`，可随时运行 `youtube-summarizer --setup` 重新配置。
+
 依赖：
 - `yt-dlp`
 - `youtube-transcript-api`
@@ -47,6 +59,19 @@ Skill 使用多种方法获取字幕，避免 YouTube 限流：
 
 ## 使用
 
+### 图文模式说明
+
+| 模式 | 说明 | 额外 token |
+|------|------|-----------|
+| `text-only` | 纯文字，不抽帧 | 0 |
+| `auto-insert` | 固定规则选帧，按时间戳插入（帧偏移+5s避转场） | ~0 |
+| `ai-review` ← **默认** | 基于文章结构反向选图，可补帧/删帧/替换 | ~5-8k |
+
+通过以下方式指定模式（优先级从高到低）：
+1. CLI 参数 `--mode`
+2. 环境变量 `SUMMARY_MODE`
+3. `config/settings.json` 中的 `default_mode`
+
 ### 1. 单个视频摘要（YouTube）
 
 ```bash
@@ -61,10 +86,15 @@ youtube-summarizer --url "https://www.bilibili.com/video/BV1xxxxx"
 # 短链接也支持（自动跟随跳转）
 youtube-summarizer --url "https://b23.tv/xxxxx"
 
+# 指定图文模式
+youtube-summarizer --url "https://www.bilibili.com/video/BV1xxxxx" --mode text-only
+youtube-summarizer --url "https://www.bilibili.com/video/BV1xxxxx" --mode auto-insert
+youtube-summarizer --url "https://www.bilibili.com/video/BV1xxxxx" --mode ai-review
+
 # 自定义 whisper 模型（精度更高，但更慢）
 youtube-summarizer --url "https://www.bilibili.com/video/BV1xxxxx" --whisper-model large-v3
 
-# 跳过关键帧提取（仅转录+摘要，更快）
+# 跳过关键帧提取（等效 --mode text-only）
 youtube-summarizer --url "https://www.bilibili.com/video/BV1xxxxx" --no-frames
 
 # 自定义关键帧间隔（默认30秒一帧）
@@ -193,6 +223,7 @@ payload:
 | `OPENCLAW_GATEWAY_TOKEN` | OpenClaw Gateway token | 否 |
 | `GITHUB_TOKEN` | GitHub token（有 Copilot 订阅时可用） | 否 |
 | `POLLINATIONS_API_KEY` | Pollinations API Key | 否 |
+| `SUMMARY_MODE` | 图文模式：text-only / auto-insert / ai-review | 否 |
 | `WHISPER_MODEL` | B站 whisper 模型大小（默认 small） | 否 |
 | `FRAME_INTERVAL` | B站关键帧间隔秒数（默认 30） | 否 |
 | `FRAME_TIME_OFFSET` | 帧时间戳偏移秒数，避开转场（默认 5） | 否 |
