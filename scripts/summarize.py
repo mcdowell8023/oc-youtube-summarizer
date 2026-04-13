@@ -89,12 +89,34 @@ def extract_bilibili_id(url: str) -> str:
     return match.group(0) if match else "unknown"
 
 
+def select_key_frames(frame_files: list, target_count: int = 10) -> list:
+    """按固定规则从所有帧中选择关键帧
+
+    规则：
+    - 如果总帧数 <= target_count + 5，全部使用
+    - 否则均匀选取 target_count 张（包含首帧和末帧）
+    """
+    total = len(frame_files)
+    if total <= target_count + 5:
+        return frame_files
+
+    indices = [0]
+    step = (total - 1) / (target_count - 1)
+    for i in range(1, target_count - 1):
+        indices.append(round(i * step))
+    indices.append(total - 1)
+
+    indices = sorted(set(indices))
+    return [frame_files[i] for i in indices]
+
+
 def process_bilibili_video(
     url: str,
     output_dir: str = "/tmp",
     whisper_model: str = DEFAULT_WHISPER_MODEL,
     frame_interval: int = DEFAULT_FRAME_INTERVAL,
     skip_frames: bool = False,
+    max_frames: int = 10,
 ) -> Dict:
     """
     Process a Bilibili video:
@@ -161,6 +183,17 @@ def process_bilibili_video(
         frame_files = sorted(glob.glob(os.path.join(frames_dir, "frame_*.jpg")))
         print(f"  ✅ Keyframes: {len(frame_files)}", file=sys.stderr)
 
+    # Select key frames
+    selected_frames = select_key_frames(frame_files, max_frames) if frame_files else []
+    frame_time_map = []
+    for frame_path in selected_frames:
+        frame_num = int(os.path.basename(frame_path).split('_')[1].split('.')[0])
+        time_sec = (frame_num - 1) * frame_interval
+        frame_time_map.append({
+            "file": os.path.basename(frame_path),
+            "time_sec": time_sec
+        })
+
     return {
         "video_id": video_id,
         "platform": "bilibili",
@@ -171,6 +204,10 @@ def process_bilibili_video(
         "transcript_with_timestamps": transcript_with_timestamps,
         "frame_files": frame_files,
         "frame_count": len(frame_files),
+        "selected_frames": selected_frames,
+        "selected_frame_count": len(selected_frames),
+        "frame_interval": frame_interval,
+        "frame_time_map": frame_time_map,
     }
 
 
@@ -563,6 +600,9 @@ def main():
     parser.add_argument("--frame-interval", type=int,
                         default=int(os.environ.get("FRAME_INTERVAL", DEFAULT_FRAME_INTERVAL)),
                         help="Keyframe extraction interval in seconds (default: 30)")
+    parser.add_argument("--max-frames", type=int,
+                        default=int(os.environ.get("MAX_FRAMES", 10)),
+                        help="Max keyframes to select (default: 10)")
 
     args = parser.parse_args()
 
@@ -589,6 +629,7 @@ def main():
                     whisper_model=args.whisper_model,
                     frame_interval=args.frame_interval,
                     skip_frames=args.no_frames,
+                    max_frames=args.max_frames,
                 )
                 summary = generate_summary(
                     title=bili_result.get("title", "B站视频"),
@@ -605,6 +646,10 @@ def main():
                     "transcript_path": bili_result["transcript_path"],
                     "frame_files": bili_result["frame_files"],
                     "frame_count": bili_result["frame_count"],
+                    "selected_frames": bili_result["selected_frames"],
+                    "selected_frame_count": bili_result["selected_frame_count"],
+                    "frame_interval": bili_result["frame_interval"],
+                    "frame_time_map": bili_result["frame_time_map"],
                     "summary": summary or "摘要生成失败",
                 }
                 results["items"].append(result)
