@@ -89,20 +89,23 @@ def extract_bilibili_id(url: str) -> str:
     return match.group(0) if match else "unknown"
 
 
-def select_key_frames(frame_files: list, target_count: int = 10) -> list:
+def select_key_frames(frame_files: list, target_count: int = 10, oversample_ratio: float = 1.5) -> list:
     """按固定规则从所有帧中选择关键帧
 
     规则：
-    - 如果总帧数 <= target_count + 5，全部使用
-    - 否则均匀选取 target_count 张（包含首帧和末帧）
+    - 如果总帧数 <= actual_count + 3，全部使用
+    - 否则均匀选取 actual_count 张（包含首帧和末帧）
+    - actual_count = round(target_count * oversample_ratio)，多选留余量
     """
     total = len(frame_files)
-    if total <= target_count + 5:
+    actual_count = min(round(target_count * oversample_ratio), total)
+
+    if total <= actual_count + 3:
         return frame_files
 
     indices = [0]
-    step = (total - 1) / (target_count - 1)
-    for i in range(1, target_count - 1):
+    step = (total - 1) / (actual_count - 1)
+    for i in range(1, actual_count - 1):
         indices.append(round(i * step))
     indices.append(total - 1)
 
@@ -184,11 +187,12 @@ def process_bilibili_video(
         print(f"  ✅ Keyframes: {len(frame_files)}", file=sys.stderr)
 
     # Select key frames
+    FRAME_TIME_OFFSET = int(os.environ.get("FRAME_TIME_OFFSET", "5"))
     selected_frames = select_key_frames(frame_files, max_frames) if frame_files else []
     frame_time_map = []
     for frame_path in selected_frames:
         frame_num = int(os.path.basename(frame_path).split('_')[1].split('.')[0])
-        time_sec = (frame_num - 1) * frame_interval
+        time_sec = (frame_num - 1) * frame_interval + FRAME_TIME_OFFSET  # +偏移避开转场
         frame_time_map.append({
             "file": os.path.basename(frame_path),
             "time_sec": time_sec

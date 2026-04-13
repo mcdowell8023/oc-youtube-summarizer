@@ -195,6 +195,7 @@ payload:
 | `POLLINATIONS_API_KEY` | Pollinations API Key | 否 |
 | `WHISPER_MODEL` | B站 whisper 模型大小（默认 small） | 否 |
 | `FRAME_INTERVAL` | B站关键帧间隔秒数（默认 30） | 否 |
+| `FRAME_TIME_OFFSET` | 帧时间戳偏移秒数，避开转场（默认 5） | 否 |
 
 无需任何 Key 也可运行：转录功能不需要 API Key；摘要功能会尝试 Pollinations 免费匿名调用。
 
