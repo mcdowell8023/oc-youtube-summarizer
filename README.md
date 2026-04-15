@@ -1,105 +1,168 @@
-# OpenClaw Skill - YouTube Transcript + Summary
+---
+name: video-summarizer
+description: Multi-platform video transcript extraction and AI-powered summarization (YouTube, Bilibili, extensible). Use when you need to summarize videos, extract transcripts, scan channels, or generate daily video digests.
+metadata:
+  author: mcdowell8023
+  repo: https://github.com/mcdowell8023/oc-youtube-summarizer
+---
 
-> Forked and enhanced from [happynocode/openclaw-skill-youtube](https://github.com/happynocode/openclaw-skill-youtube)
+# Video Summarizer Skill
 
-Production-ready OpenClaw skill for YouTube video transcription and summarization.
+多平台视频摘要工具，支持 YouTube 和 B站（未来可扩展更多平台），支持单个视频、频道扫描、每日批量处理。
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![OpenClaw](https://img.shields.io/badge/openclaw-compatible-green.svg)](https://openclaw.ai)
+## 功能
 
-## Features
+- ✅ 获取 YouTube 视频信息（yt-dlp）
+- ✅ 提取字幕/transcript（youtube-transcript-api）
+- ✅ **B站视频下载 + 语音转录**（yt-dlp + faster-whisper，本地，无需 API Key）
+- ✅ **B站关键帧提取**（ffmpeg，每 30 秒一帧，供 agent 视觉分析）
+- ✅ 生成深度摘要（LLM API）
+- ✅ 输出 JSON 格式（agent 自行处理发送）
+- ✅ 支持多频道配置
+- ✅ 过滤 Shorts（< 5 分钟）
+- 🔮 架构可扩展：新增平台只需添加 extractor 模块
 
-- ✅ **Reliable Transcript Fetching** - Dual-method approach bypasses YouTube rate limiting
-- ✅ **Batch Processing** - Process multiple channels in one run
-- ✅ **AI-Powered Summaries** - Generate structured, insightful summaries
-- ✅ **3 Output Modes** - text-only / auto-insert / ai-review (configurable)
-- ✅ **Cron-Friendly** - Built for automated daily runs
-- ✅ **JSON Output** - Flexible integration with any agent or platform
-- ✅ **Filters Shorts** - Skip videos under 5 minutes
-- ✅ **Zero-config** - Works without any API key (Pollinations free tier)
-
-> **B站视频说明**：此 Skill 仅支持 YouTube。B站视频建议使用 yt-dlp + faster-whisper 本地方案，效果更稳定。
-
-## Quick Start
+## 安装
 
 ```bash
-# Install
-cd ~/.openclaw/workspace/skills
-git clone https://github.com/mcdowell8023/oc-youtube-summarizer.git youtube-summarizer
-cd youtube-summarizer
+cd ~/.openclaw/skills/video-summarizer
 ./setup.sh
-# ↑ 安装完成后会引导你选择默认图文模式
-
-# Re-configure mode anytime
-./youtube-summarizer --setup
-
-# Test single video
-./youtube-summarizer --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-
-# With explicit mode
-./youtube-summarizer --url "https://b23.tv/xxx" --mode ai-review
-
-# Scan channel (last 24 hours)
-./youtube-summarizer --channel "UCSHZKyawb77ixDdsGog4iWA" --hours 24
-
-# Daily batch (for cron)
-./youtube-summarizer --config channels.json --daily --output /tmp/youtube_summary.json
 ```
 
-## Output Modes
+安装完成后会引导你选择默认图文模式（可随时重新配置）：
 
-| Mode | Description | Extra Tokens |
-|------|-------------|-------------|
-| `text-only` | Text only, no frames | 0 |
-| `auto-insert` | Fixed-rule frame selection, insert by timestamp | ~0 |
-| `ai-review` ← **default** | AI-driven image selection based on article structure | ~5-8k |
+```
+📋 选择默认图文模式:
+  1) text-only    - 纯文字，不抽帧（最快）
+  2) auto-insert  - 自动选帧插入文档（推荐平衡）
+  3) ai-review    - AI 智能选图（默认，最佳效果，多消耗 ~5-8k token）
+请选择 [1/2/3] (默认 3):
+```
 
-Select mode at install time, or override anytime:
-- `--mode <mode>` CLI flag
-- `SUMMARY_MODE` env var
-- `config/settings.json` → `default_mode`
+配置写入 `config/settings.json`，可随时运行 `video-summarizer --setup` 重新配置。
 
-## How It Works
+### 跨平台依赖安装
 
-### Transcript Fetching
+#### Linux（当前已支持）
 
-Uses dual-method approach to ensure reliability:
+```bash
+sudo apt install ffmpeg
+pip install faster-whisper yt-dlp youtube-transcript-api innertube
+```
 
-1. **Primary**: innertube ANDROID client
-   - Bypasses YouTube's rate limiting
-   - Works reliably from various environments
+#### macOS
 
-2. **Fallback**: youtube-transcript-api
-   - Automatic fallback if primary method fails
+```bash
+brew install ffmpeg
+pip install faster-whisper yt-dlp youtube-transcript-api innertube
+```
 
-### Summary Generation
+#### Windows
 
-LLM fallback chain (fully environment variable driven, no config files needed):
+```bash
+# 安装 ffmpeg（推荐 chocolatey 或 scoop）
+choco install ffmpeg
+# 或 scoop install ffmpeg
 
-1. `LLM_API_URL` + `LLM_API_KEY` + `LLM_MODEL` → custom endpoint
-2. `OPENCLAW_GATEWAY_TOKEN` → OpenClaw local gateway
-3. `GITHUB_TOKEN` / `GH_TOKEN` → GitHub Copilot API
-4. `POLLINATIONS_API_KEY` → Pollinations API (with key)
-5. Pollinations free anonymous call (no key required)
+pip install faster-whisper yt-dlp youtube-transcript-api innertube
+```
 
-## Environment Variables
+#### 注意事项
 
-| 变量 | 用途 | 必须 |
-|------|------|------|
-| `LLM_API_URL` | 自定义 LLM API 端点 | 否 |
-| `LLM_API_KEY` | 自定义 LLM API Key | 否 |
-| `LLM_MODEL` | 自定义模型名 | 否 |
-| `OPENCLAW_GATEWAY_TOKEN` | OpenClaw Gateway token | 否 |
-| `GITHUB_TOKEN` | GitHub token（有 Copilot 订阅时可用） | 否 |
-| `POLLINATIONS_API_KEY` | Pollinations API Key | 否 |
+- **路径分隔符**：脚本已使用 `path.join()`，跨平台兼容
+- **faster-whisper**：Windows 下需要 CUDA 或 CPU 模式（无 CUDA 时自动 fallback CPU，速度较慢）
+- **Chrome cookies**：各平台路径不同，yt-dlp 会自动处理
+- **Python 版本**：需要 Python 3.9+
 
-无需任何 Key 也可运行：转录功能不需要 API Key；摘要功能会尝试 Pollinations 免费匿名调用。
+### 核心依赖说明
 
-## Configuration
+| 依赖 | 用途 |
+|------|------|
+| `yt-dlp` | 视频下载、信息获取（YouTube + B站） |
+| `youtube-transcript-api` | YouTube 字幕提取 |
+| `innertube` | 绕过 YouTube API 限流 |
+| `faster-whisper` | B站语音转文字（本地，无需 API） |
+| `ffmpeg` | 音频提取 + 关键帧截取（系统级） |
 
-Create `channels.json`:
+## 工作原理
 
+Skill 使用多种方法获取字幕，避免 YouTube 限流：
+
+1. **innertube ANDROID client + Cloudflare proxy** - 主要方法，绕过限流
+2. **youtube-transcript-api** - 备用方法
+
+B站视频使用 yt-dlp 下载音频 → faster-whisper 本地转录，全程无需外部 API。
+
+## 使用
+
+### 三种图文模式
+
+| 模式 | 说明 | 额外 token | 适用场景 |
+|------|------|-----------|---------|
+| `text-only` | 纯文字，不抽帧 | 0 | 快速摘要、纯文字需求 |
+| `auto-insert` | 固定规则选帧，按时间戳插入（帧偏移+5s避转场） | ~0 | 平衡速度与图文效果 |
+| `ai-review` ← **默认** | 基于文章结构反向选图，可补帧/删帧/替换 | ~5-8k | 最佳图文效果 |
+
+**ai-review 流程（文章驱动选图）：**
+1. Skill 抽帧 → 固定规则多选（~15-20帧，比最终需要多50%）
+2. 先写纯文字版文档（分好章节）
+3. 逐章判断：需要配图？→ 从已选帧匹配 / 补帧 / 跳过
+4. 输出精选帧 + 画面描述 + 对应章节
+
+**auto-insert 流程：**
+1. Skill 抽帧 → 固定规则选帧（多选留余量）
+2. 帧时间偏移 +5s（避开转场）
+3. 按时间戳匹配章节，全部插入
+
+通过以下方式指定模式（优先级从高到低）：
+1. CLI 参数 `--mode`
+2. 环境变量 `SUMMARY_MODE`
+3. `config/settings.json` 中的 `default_mode`
+
+### 1. 单个视频摘要（YouTube）
+
+```bash
+video-summarizer --url "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+### 2. B站视频摘要
+
+```bash
+video-summarizer --url "https://www.bilibili.com/video/BV1xxxxx"
+
+# 短链接也支持（自动跟随跳转）
+video-summarizer --url "https://b23.tv/xxxxx"
+
+# 指定图文模式
+video-summarizer --url "https://www.bilibili.com/video/BV1xxxxx" --mode text-only
+video-summarizer --url "https://www.bilibili.com/video/BV1xxxxx" --mode auto-insert
+video-summarizer --url "https://www.bilibili.com/video/BV1xxxxx" --mode ai-review
+
+# 自定义 whisper 模型（精度更高，但更慢）
+video-summarizer --url "https://www.bilibili.com/video/BV1xxxxx" --whisper-model large-v3
+
+# 跳过关键帧提取（等效 --mode text-only）
+video-summarizer --url "https://www.bilibili.com/video/BV1xxxxx" --no-frames
+
+# 自定义关键帧间隔（默认30秒一帧）
+video-summarizer --url "https://www.bilibili.com/video/BV1xxxxx" --frame-interval 60
+```
+
+### 3. 频道扫描（过去 24 小时）
+
+```bash
+video-summarizer --channel "UC_x5XG1OV2P6uZZ5FSM9Ttw" --hours 24
+```
+
+### 4. 每日批量处理（Cron 用）
+
+```bash
+video-summarizer --config /path/to/channels.json --daily --output /tmp/video_daily.json
+```
+
+## 配置文件格式
+
+`channels.json`:
 ```json
 {
   "channels": [
@@ -120,25 +183,33 @@ Create `channels.json`:
 }
 ```
 
-## Output Format
+## 输出格式
 
 ```json
 {
   "generated_at": "2026-02-14T11:17:00Z",
   "items": [
     {
-      "video_id": "dQw4w9WgXcQ",
-      "title": "Video Title",
+      "title": "视频标题",
       "url": "https://youtube.com/watch?v=...",
-      "channel": "Channel Name",
+      "video_id": "VIDEO_ID",
+      "platform": "youtube",
+      "channel": "频道名",
       "duration": "15:30",
-      "published": "20260214",
+      "published": "2026-02-14T08:00:00Z",
       "has_transcript": true,
-      "summary": "# Markdown summary...",
-      "metadata": {
-        "view_count": 12345,
-        "like_count": 678
-      }
+      "summary": "# 摘要内容（markdown）\n\n### 🎯 核心问题..."
+    },
+    {
+      "video_id": "BV1xxxxx",
+      "title": "B站视频标题",
+      "url": "https://www.bilibili.com/video/BV1xxxxx",
+      "platform": "bilibili",
+      "has_transcript": true,
+      "transcript_path": "/tmp/bili_BV1xxxxx_transcript.txt",
+      "frame_files": ["/tmp/bili_BV1xxxxx_frames/frame_001.jpg", "..."],
+      "frame_count": 12,
+      "summary": "# 摘要内容（markdown）..."
     }
   ],
   "stats": {
@@ -149,61 +220,30 @@ Create `channels.json`:
 }
 ```
 
-## OpenClaw Integration
+## 环境变量
 
-### Cron Job Example
+| 变量 | 用途 | 必须 |
+|------|------|------|
+| `LLM_API_URL` | 自定义 LLM API 端点 | 否 |
+| `LLM_API_KEY` | 自定义 LLM API Key | 否 |
+| `LLM_MODEL` | 自定义模型名 | 否 |
+| `OPENCLAW_GATEWAY_TOKEN` | OpenClaw Gateway token | 否 |
+| `GITHUB_TOKEN` | GitHub token（有 Copilot 订阅时可用） | 否 |
+| `POLLINATIONS_API_KEY` | Pollinations API Key | 否 |
+| `SUMMARY_MODE` | 图文模式：text-only / auto-insert / ai-review | 否 |
+| `WHISPER_MODEL` | B站 whisper 模型大小（默认 small） | 否 |
+| `FRAME_INTERVAL` | B站关键帧间隔秒数（默认 30） | 否 |
+| `FRAME_TIME_OFFSET` | 帧时间戳偏移秒数，避开转场（默认 5） | 否 |
 
-```yaml
-schedule:
-  kind: cron
-  expr: "0 8 * * *"  # 8 AM daily
-payload:
-  kind: agentTurn
-  message: |
-    Run YouTube daily summary:
-    
-    1. Execute skill:
-       youtube-summarizer --config channels.json --daily --output /tmp/summary.json
-    
-    2. Read output and process each video
-    
-    3. Send to Discord / Feishu / Telegram
-```
+无需任何 Key 也可运行：转录功能不需要 API Key；摘要功能会尝试 Pollinations 免费匿名调用。
 
-## Dependencies
+## 故障排查
 
-- `yt-dlp` - Video metadata extraction
-- `youtube-transcript-api` - Transcript fetching (fallback)
-- `innertube` - YouTube API client (primary method)
-- Python 3.9+
+### 字幕获取失败
+- 视频可能没有字幕
+- 输出 JSON 中 `has_transcript: false`
+- Agent 应生成简短摘要（基于标题/描述）
 
-All dependencies are installed automatically by `setup.sh`.
-
-## Troubleshooting
-
-### Transcript fetch fails
-- Video may not have captions
-- Check `has_transcript: false` in output
-
-### Rate limiting
-- Reduce `max_videos_per_channel` in config
-
-### yt-dlp errors
-- Update yt-dlp: `pip install -U yt-dlp`
-- Check video is publicly accessible
-
-## License
-
-MIT License - Copyright (c) Contributors
-
-## Acknowledgments
-
-- [happynocode/openclaw-skill-youtube](https://github.com/happynocode/openclaw-skill-youtube) - Original skill
-- [OpenClaw](https://openclaw.ai) - AI agent framework
-- [innertube](https://github.com/tombulled/innertube) - YouTube API client
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - YouTube metadata extraction
-- [youtube-transcript-api](https://github.com/jdepoix/youtube-transcript-api) - Transcript fetching
-
----
-
-**Built for the OpenClaw community**
+### yt-dlp 限流
+- 设置 `REQUEST_DELAY_SECONDS` (默认 3 秒)
+- 减少 `max_videos_per_channel`
